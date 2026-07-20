@@ -8,8 +8,19 @@ import numpy as np
 import banco
 
 def limpar_moeda(serie):
-    """Substitui a virgula do padrao brasileiro por ponto e converte para float."""
-    return serie.astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False).replace('nan', '0').replace('None', '0').astype(float)
+    """
+    Substitui a virgula do padrao brasileiro por ponto e converte para float.
+    Valores ausentes/invalidos viram NaN (nao 0), para nao mascarar dados
+    faltantes nas somas e medias. Quem precisar tratar ausente como 0 (ex.:
+    colunas somadas em valor_total) faz isso explicitamente com .fillna(0).
+    """
+    serie_limpa = (
+        serie.astype(str)
+        .str.replace('.', '', regex=False)
+        .str.replace(',', '.', regex=False)
+        .replace({'nan': None, 'None': None, '': None})
+    )
+    return pd.to_numeric(serie_limpa, errors='coerce')
 
 def limpar_data(serie):
     """Converte string no formato DD/MM/AAAA para objeto Date (YYYY-MM-DD)."""
@@ -39,9 +50,19 @@ def processar_viagem(conexao):
         df[col] = limpar_moeda(df[col])
     
     # Colunas Calculadas da Regra de Negocio
-    df['valor_total'] = df['valor_diarias'] + df['valor_passagens'] + df['valor_outros_gastos'] - df['valor_devolucao']
+    # Regra: valor_total trata componente ausente como 0 (nao propaga NaN),
+    # mas as colunas originais (valor_diarias, valor_passagens, etc.) mantem
+    # o NULL real quando o dado nao veio informado no CSV.
+    componentes_soma = df[['valor_diarias', 'valor_passagens', 'valor_outros_gastos']].fillna(0).sum(axis=1)
+    df['valor_total'] = componentes_soma - df['valor_devolucao'].fillna(0)
     df['duracao_dias'] = (df['data_fim'] - df['data_inicio']).dt.days
-    
+
+    # Integridade da PK: id_viagem nao pode se repetir na Silver.
+    duplicados = df.duplicated(subset=['id_viagem']).sum()
+    if duplicados > 0:
+        print(f"  Aviso: {duplicados} registro(s) com id_viagem duplicado removido(s) (mantido o primeiro).")
+        df = df.drop_duplicates(subset=['id_viagem'], keep='first')
+
     # Converter dados nulos do Pandas para nulos nativos do Banco de Dados
     df = df.replace({np.nan: None})
     
@@ -114,7 +135,13 @@ def processar_trecho(conexao):
     df['destino_data'] = limpar_data(df['destino_data'])
     df['numero_diarias'] = limpar_moeda(df['numero_diarias'])
     df['sequencia_trecho'] = pd.to_numeric(df['sequencia_trecho'], errors='coerce')
-    
+
+    # Integridade da UNIQUE (id_viagem, sequencia_trecho)
+    duplicados = df.duplicated(subset=['id_viagem', 'sequencia_trecho']).sum()
+    if duplicados > 0:
+        print(f"  Aviso: {duplicados} trecho(s) duplicado(s) por (id_viagem, sequencia_trecho) removido(s).")
+        df = df.drop_duplicates(subset=['id_viagem', 'sequencia_trecho'], keep='first')
+
     df = df.replace({np.nan: None})
     banco.executar(conexao, "TRUNCATE TABLE silver_trecho CASCADE;")
     
@@ -142,4 +169,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
+    
