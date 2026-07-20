@@ -1,0 +1,12 @@
+# Arquivo de variaveis de ambiente (credenciais)
+.env
+
+# Arquivos de dados extraidos ou brutos
+*.zip
+*.csv
+data/
+
+# Arquivos de cache do Python e do Jupyter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
